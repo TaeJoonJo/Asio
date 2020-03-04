@@ -71,8 +71,15 @@ public:
 #pragma region InitPlayer
 		id_ = GetNewUserID();
 		_Players[id_].JoinPlayer(this);
-		std::cout << "Join Player ID [ " << id_ << "].\n";
+		std::cout << "Join Player ID [ " << id_ << " ]\n";
 #pragma endregion
+
+		auto sendIDPacket = [this]() {
+			PACKET_ID packet{ sizeof(PACKET_ID), EPacketType::id, id_ };
+			SendPacket(&packet, id_);
+		};
+		sendIDPacket();
+
 		DoTCPRead();
 	}
 	void DoTCPRead() {
@@ -143,7 +150,7 @@ public:
 		char c = reinterpret_cast<PACKET_SIMPLE*>(ppacket)->c_;
 		std::cout << "ID [ " << id << " ] Send '" << c << " '\n";
 
-		PACKET_SIMPLE packet{ sizeof(PACKET_SIMPLE), id, c };
+		PACKET_SIMPLE packet{ sizeof(PACKET_SIMPLE), EPacketType::simplechat, id, c };
 
 		for (int i = 0; i < _MAX_USER; ++i) {
 			CPlayer& player = _Players[i];
