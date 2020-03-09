@@ -2,10 +2,12 @@
 #include <iostream>
 #include <chrono>
 #include <atomic>
-#include <memory>
+//#include <memory>
 #include <vector>
 #include <array>
-#include <thread>
+//#include <thread>
+#include "boost/shared_ptr.hpp"
+#include "boost/thread.hpp"
 #include "boost/asio.hpp"
 #include "../../Protocols.h"
 
@@ -33,13 +35,13 @@ public:
 	~CPlayer() = default;
 public:
 	volatile bool isconnected_;
-	CSession* psession_;
+	boost::shared_ptr<CSession> psession_;
 	std::chrono::system_clock::time_point startTime_;
 public:
 	void InitPlayer() {
 		isconnected_ = false;
 	}
-	void JoinPlayer(CSession* psession) {
+	void JoinPlayer(boost::shared_ptr<CSession> psession) {
 		isconnected_ = true;
 		psession_ = psession;
 		startTime_ = std::chrono::system_clock::now();
@@ -49,11 +51,11 @@ public:
 std::array<CPlayer, _MAX_USER> _Players;
 
 class CSession
-	: std::enable_shared_from_this<CSession>
+	: public boost::enable_shared_from_this<CSession>
 {
 public:
 	CSession() = delete;
-	CSession(tcp::socket socket) : tcpSocket_(std::move(socket)), currentPacketSize_(0), prevPacketSize_(0) {}
+	CSession(tcp::socket socket) : tcpSocket_(std::move(socket)), currentPacketSize_(0), prevPacketSize_(0), id_() {}
 	~CSession() = default;
 	CSession(const CSession& o) = delete;
 	const CSession& operator=(const CSession& o) = delete;
@@ -70,9 +72,11 @@ public:
 	void Start() {
 #pragma region InitPlayer
 		id_ = GetNewUserID();
-		_Players[id_].JoinPlayer(this);
+		_Players[id_].JoinPlayer(shared_from_this());
 		std::cout << "Join Player ID [ " << id_ << " ]\n";
 #pragma endregion
+
+		DoTCPRead();
 
 		auto sendIDPacket = [this]() {
 			PACKET_ID packet{ sizeof(PACKET_ID), EPacketType::id, id_ };
@@ -80,7 +84,6 @@ public:
 		};
 		sendIDPacket();
 
-		DoTCPRead();
 	}
 	void DoTCPRead() {
 		auto self(shared_from_this());
@@ -92,6 +95,7 @@ public:
 					if (false == _Players[id_].isconnected_) return;
 					tcpSocket_.shutdown(tcpSocket_.shutdown_both);
 					tcpSocket_.close();
+					std::cout << "ID [ " << id_ << " ] Out Player\n";
 					//udpSocket_.shutdown(udpSocket_.shutdown_both);
 					//udpSocket_.close();
 					return;
@@ -175,7 +179,7 @@ public:
 			[this](boost::system::error_code ec)
 			{
 				if (!ec) {
-					std::make_shared<CSession>(std::move(socket_))->Start();
+					boost::make_shared<CSession>(std::move(socket_))->Start();
 				}
 				DoAccept();
 			});
@@ -189,7 +193,7 @@ void WorkerThread(boost::asio::io_service* service) {
 int main()
 {
 	boost::asio::io_service service;
-	std::vector<std::thread*> vecThreads;
+	std::vector<boost::thread*> vecThreads;
 
 	CServer server(service, _SERVER_PORT);
 
@@ -205,7 +209,7 @@ int main()
 
 #pragma region InitThread
 	for (int i = 0; i < _MAX_THREAD; ++i) {
-		vecThreads.push_back(new std::thread{ WorkerThread, &service });
+		vecThreads.push_back(new boost::thread{ WorkerThread, &service });
 	}
 #pragma endregion
 

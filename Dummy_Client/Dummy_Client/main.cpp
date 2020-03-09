@@ -58,15 +58,18 @@ void SendPacket(void* ppacket, CSession* psession) {
 void WorkerThread() {
 	while (true) {
 		IOContext* pcontext = nullptr;
-		DWORD ioSize;
+		DWORD ioSize{};
 		CSession* psession = nullptr;
 
 		bool ret = GetQueuedCompletionStatus(_IOCP, &ioSize, reinterpret_cast<PULONG_PTR>(&psession), reinterpret_cast<LPOVERLAPPED*>(&pcontext), INFINITE);
-
+		/*if (psession == nullptr) {
+			continue;
+		}*/
 		if (ret == false || 0 == ioSize) {
 			psession->isrun_ = false;
 			closesocket(psession->socket_);
 		}
+		
 
 		if (EIOType::recv == pcontext->iotype_) {
 			uint8_t* pbuf = psession->buf_;
@@ -77,6 +80,7 @@ void WorkerThread() {
 			case EPacketType::id: {
 				PACKET_ID* ppacket = reinterpret_cast<PACKET_ID*>(pbuf);
 				psession->id_ = ppacket->id_;
+				std::cout << "ID [ " << ppacket->id_ << " ] Player Join\n";
 			} break;
 			case EPacketType::simplechat: {
 				PACKET_SIMPLE* ppacket = reinterpret_cast<PACKET_SIMPLE*>(pbuf);
@@ -86,52 +90,6 @@ void WorkerThread() {
 		}
 		else {
 			delete pcontext;
-		}
-	}
-}
-
-void TestThread() {
-	while (true) {
-		std::this_thread::sleep_for(std::chrono::seconds(1));
-		for (auto& dummy : _Dummys) {
-			if (false == dummy.isrun_) continue;
-			if (std::chrono::system_clock::now() - dummy.lastChatTime_ < std::chrono::seconds(10)) continue;
-			PACKET_SIMPLE packet{ sizeof(PACKET_SIMPLE), EPacketType::simplechat, dummy.id_ };
-			SendPacket(&packet, &dummy);
-			dummy.lastChatTime_ = std::chrono::system_clock::now();
-			break;
-		}
-	}
-}
-
-void AdjustThread() {
-	while (true) {
-		std::this_thread::sleep_for(std::chrono::seconds(3));
-		for(int i = 0; i < _MAX_DUMMY; ++i) {
-			if (true == _Dummys[i].isrun_) continue;
-
-			SOCKADDR_IN serverAddr{};
-			serverAddr.sin_family = AF_INET;
-			serverAddr.sin_port = htons(_SERVER_PORT);
-			serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-			int ret = WSAConnect(_Dummys[i].socket_, (sockaddr*)&serverAddr, sizeof(serverAddr), NULL, NULL, NULL, NULL);
-			if (0 != ret) {
-				std::cout << "connect error [ " << WSAGetLastError() << " ]\n";
-				break;
-			}
-				
-			_Dummys[i].ioContex_.iotype_ = EIOType::recv;
-			_Dummys[i].ioContex_.wsabuf_.buf = reinterpret_cast<char*>(_Dummys[i].buf_);
-			_Dummys[i].ioContex_.wsabuf_.len = _MAX_BUFFER;
-
-			DWORD flag{};
-			CreateIoCompletionPort(reinterpret_cast<HANDLE>(_Dummys[i].socket_), _IOCP, reinterpret_cast<ULONG_PTR>(&_Dummys[i]), 0);
-			if (SOCKET_ERROR == WSARecv(_Dummys[i].socket_, &_Dummys[i].ioContex_.wsabuf_, 1, NULL, &flag, &_Dummys[i].ioContex_.overlapped_, NULL))
-				continue;
-
-			_Dummys[i].isrun_ = true;
-			break;
 		}
 	}
 }
@@ -150,7 +108,7 @@ int main()
 
 #pragma region InitDummys
 	for (auto& dummy : _Dummys) {
-		dummy.socket_ = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, 0);
+		dummy.socket_ = WSASocketW(PF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
 		dummy.isrun_ = false;
 		int ran = rand() % _MAX_DUMMY;
 		dummy.lastChatTime_ = std::chrono::system_clock::now() + std::chrono::seconds(ran);
@@ -162,50 +120,54 @@ int main()
 	for (int i = 0; i < _MAX_WORKERTHREAD - 1; ++i) {
 		vecThreads.push_back(std::thread(WorkerThread));
 	}
-	//auto TestThread = []() {
-	//	while (true) {
-	//		std::this_thread::sleep_for(std::chrono::seconds(1));
-	//		for (auto& dummy : _Dummys) {
-	//			if (false == dummy.isrun_) continue;
-	//			if (std::chrono::system_clock::now() - dummy.lastChatTime_ < std::chrono::seconds(10)) continue;
-	//			PACKET_SIMPLE packet{sizeof(PACKET_SIMPLE), EPacketType::simplechat, dummy.id_};
-	//			SendPacket(&packet, &dummy);
-	//			dummy.lastChatTime_ = std::chrono::system_clock::now();
-	//			break;
-	//		}
-	//	}
-	//};
+	auto TestThread = []() {
+		while (true) {
+			std::this_thread::sleep_for(std::chrono::seconds(1));
+			for (auto& dummy : _Dummys) {
+				if (false == dummy.isrun_) continue;
+				if (std::chrono::system_clock::now() - dummy.lastChatTime_ < std::chrono::seconds(10)) continue;
+				PACKET_SIMPLE packet{sizeof(PACKET_SIMPLE), EPacketType::simplechat, dummy.id_, rand() % 256};
+				SendPacket(&packet, &dummy);
+				dummy.lastChatTime_ = std::chrono::system_clock::now();
+				break;
+			}
+		}
+	};
 	vecThreads.push_back(std::thread(TestThread));
 
-	//auto AdjustDummy = []() {
-	//	while (true) {
-	//		std::this_thread::sleep_for(std::chrono::seconds(10));
-	//		for (auto& dummy : _Dummys) {
-	//			if (true == dummy.isrun_) continue;
-	//
-	//			SOCKADDR_IN serverAddr{};
-	//			serverAddr.sin_family = AF_INET;
-	//			serverAddr.sin_port = htons(_SERVER_PORT);
-	//			serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-	//
-	//			if (0 != WSAConnect(dummy.socket_, (sockaddr*)&serverAddr, sizeof(serverAddr), NULL, NULL, NULL, NULL))
-	//				continue;
-	//			dummy.ioContex_.iotype_ = EIOType::recv;
-	//			dummy.ioContex_.wsabuf_.buf = reinterpret_cast<char*>(dummy.buf_);
-	//			dummy.ioContex_.wsabuf_.len = _MAX_BUFFER;
-	//
-	//			DWORD flag{};
-	//			CreateIoCompletionPort(reinterpret_cast<HANDLE>(dummy.socket_), _IOCP, reinterpret_cast<ULONG_PTR>(&dummy), 0);
-	//			if (SOCKET_ERROR == WSARecv(dummy.socket_, &dummy.ioContex_.wsabuf_, 1, NULL, &flag, &dummy.ioContex_.overlapped_, NULL))
-	//				continue;
-	//
-	//			dummy.isrun_ = true;
-	//			break;
-	//		}
-	//	}
-	//};
-	//AdjustDummy();
-	AdjustThread();
+	auto AdjustDummy = []() {
+		while (true) {
+			Sleep(5000);
+			for (auto& dummy : _Dummys) {
+			//for(int i = 0 ; i < _MAX_DUMMY; ++i){
+				if (true == dummy.isrun_) continue;
+				
+				dummy.socket_ = WSASocketW(PF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+
+				SOCKADDR_IN serverAddr{};
+				serverAddr.sin_family = AF_INET;
+				serverAddr.sin_port = htons(_SERVER_PORT);
+				serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	
+				if (0 != WSAConnect(dummy.socket_, (sockaddr*)&serverAddr, sizeof(serverAddr), NULL, NULL, NULL, NULL))
+					continue;
+				dummy.ioContex_.iotype_ = EIOType::recv;
+				dummy.ioContex_.wsabuf_.buf = reinterpret_cast<char*>(dummy.buf_);
+				dummy.ioContex_.wsabuf_.len = _MAX_BUFFER;
+	
+				DWORD flag{};
+				CreateIoCompletionPort(reinterpret_cast<HANDLE>(dummy.socket_), _IOCP, reinterpret_cast<ULONG_PTR>(&dummy), 0);
+				if (SOCKET_ERROR == WSARecv(dummy.socket_, &dummy.ioContex_.wsabuf_, 1, NULL, &flag, &dummy.ioContex_.overlapped_, NULL))
+					continue;
+	
+				dummy.isrun_ = true;
+				break;
+			}
+			
+			std::this_thread::sleep_for(std::chrono::seconds(5));
+		}
+	};
+	AdjustDummy();
 
 	for (int i = 0; i < _MAX_WORKERTHREAD; ++i) {
 		vecThreads[i].join();
